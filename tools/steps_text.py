@@ -1,0 +1,141 @@
+"""Step descriptions and parts list (single source for the schematics notes, docs/steps.md and docs/bom.md)."""
+
+STEPS = [
+    dict(slug="baseline", title="baseline (no protection)", stars=0,
+         rating="nothing limits a fault; the circuit only works when every part works.",
+         notes=["Baseline: inlet, 1-pole switch, PSU 24 V, SSR, bed heater, Duet. PE to PSU case (FG) and bed.",
+                "Duet switches the SSR from its BED output (BED+ = VIN, BED- low-side switched)."],
+         why=["The simplest working circuit: C14 inlet, 1-pole switch, 24 V PSU, Duet, SSR and a 230 V bed heater.",
+              "",
+              "Hazards of this circuit:",
+              "- **SSR fails shorted** (the most common SSR failure, frequent with counterfeit SSR-25DA): the bed heats at full power"
+              " without end. Duet thermal-runaway detection can only switch the SSR input off – useless when the SSR is shorted.",
+              "- **No fuse**: the house breaker (B16) protects the building wiring, not 0.5–0.75 mm² wires inside the printer.",
+              "- **1-pole switch + reversible Schuko plug**: with the plug reversed the switch breaks N; PSU, SSR and heater stay live when OFF.",
+              "- **No way to cut power automatically** or by an emergency button; no fire detection.",
+              "- 230 V on a moving bed (cable flexing), SSR heating (≈1–1.5 W per amp, needs a heatsink), SSR off-state leakage"
+              " (a few mA – the bed is live even when not heating, PE is essential)."]),
+    dict(slug="bed_thermal_cutoff", title="bed thermal cutoff", stars=4,
+         rating="independent of firmware and SSR; protects only against bed overheating; a bimetal resets by itself.",
+         notes=["Step 1: TH1 thermal cutoff on the bed, in series with the heater (KSD301 NC 130 °C, 250 V / 10 A).",
+                "Opens without Duet or SSR – covers the shorted-SSR case. Mount on the bed with good thermal contact."],
+         why=["**Why it is necessary:** a shorted SSR is the most likely and most dangerous fault, and nothing in the baseline"
+              " can stop it. A thermal cutoff fixed to the bed, in series with the heater, opens by physics – no firmware, no SSR.",
+              "",
+              "- Cutoff temperature ≈ 15–20 °C above the highest bed set-point (110 °C for ABS → 130 °C).",
+              "- Current rating above the heater current (750 W ≈ 3.3 A → 10 A part is fine).",
+              "- **Bimetal (KSD301)** resets when cool: with a shorted SSR the bed oscillates around 130 °C instead of running away."
+              " Survivable, but the fault is not latched. **One-shot thermal fuse** latches off (must be replaced)."
+              " Later steps (K1/K2 relays, supervisor) add the latching cut-off, so a bimetal is enough here."]),
+    dict(slug="mains_fuse", title="mains fuse", stars=3,
+         rating="clears short circuits and overloads; does nothing against overheating at normal current (stuck SSR).",
+         notes=["Step 2: F1 slow-blow fuse in L, right after the inlet (inlet module with fuse drawer).",
+                "Size: (bed W + PSU W / 0.85) / 230 V x 1.25, e.g. 750 W + 350 W -> 5.3 A -> T6.3A."],
+         why=["**Why it is necessary:** the building breaker is sized for the house wiring (16 A). A short inside the printer –"
+              " a chafed heater cable, a failed PSU input – can burn thin internal wires before a B16 trips. A fuse sized to the"
+              " printer load clears it quickly.",
+              "",
+              "- Slow-blow (T) because of PSU inrush current; fuse in L (after step 3 the 2-pole switch also isolates N).",
+              "- Practical part: C14 inlet module with fuse drawer (often with a 2-pole switch → step 3 in the same part).",
+              "- It does **not** help with a stuck SSR: the heater current is normal, the fuse does not see a fault."]),
+    dict(slug="two_pole_switch", title="2-pole main switch", stars=3,
+         rating="service safety with a reversible plug; manual only, no fault protection.",
+         notes=["Step 3: Q0 2-pole main switch (L and N). A Schuko plug can be reversed – a 1-pole switch may break only N.",
+                "Still unplug the printer before working inside."],
+         why=["**Why it is necessary:** a Schuko plug fits both ways. With a 1-pole switch in the wire that happens to be N,"
+              " the PSU input, the SSR and the bed stay at 230 V when the printer is 'off'. A 2-pole switch breaks both"
+              " wires regardless of plug orientation.",
+              "",
+              "- 16 A rated rocker or the inlet module's built-in 2-pole switch.",
+              "- It is a manual isolator, not an automatic protection."]),
+    dict(slug="mains_relays_stop", title="mains relays K1/K2 + STOP", stars=4,
+         rating="hard-wired emergency stop and automatic cut of ALL 230 V loads; automatic action still depends on Duet firmware.",
+         notes=["Step 4: K1 (L) and K2 (N) mains relays switch PSU 24 V and SSR. 5 V standby PSU stays on after Q0.",
+                "Safety loop: +5V -> F2 -> STOP (NC) -> coils K1, K2 (+ flyback diodes, lamp H1) -> Q1 -> GND. Any open = power off.",
+                "Duet runs on 5 V standby (5V_EXT) and drives Q1 via PS_ON (M80/M81 C\"pin\"); heater-fault.g calls M81.",
+                "CHECK before wiring: Duet 2 5V_EXT jumper and PS_ON pin type/voltage (3.3 V -> logic-level MOSFET)."],
+         why=["**Why it is worth it:** the first three steps cannot remove power when something goes wrong. Two 16 A relays"
+              " in L and N take 230 V off the 24 V PSU and the SSR – this also kills a stuck SSR and a failing PSU.",
+              "",
+              "- **Fail-safe loop:** relays need current to stay on. A broken wire, a pressed STOP or a dead driver = power off.",
+              "- **STOP** (mushroom, latching, NC) acts directly on the coils – no software in the path.",
+              "- **Automatic cut:** Duet stays alive on the 5 V standby supply and switches Q1 (PS_ON). RRF calls"
+              " `heater-fault.g` on thermal runaway – put `M81` there, and in `daemon.g` checks if wanted.",
+              "- **Two 1-pole relays instead of one 2-pole:** 16 A per contact, and if one contact welds the other pole still opens.",
+              "- **H1** shows the loop state; **F2** protects the 5 V loop wiring.",
+              "- Limitation: if Duet hangs with PS_ON active, nothing cuts power automatically → step 5."]),
+    dict(slug="supervisor", title="Nano supervisor (watchdog)", stars=4,
+         rating="independent of Duet; catches a hung controller; its own firmware fails in the safe direction (no drive = off).",
+         notes=["Step 5: Arduino Nano supervises: Q1 on only if PS_ON active AND heartbeat (HB) fresh (< 5 s) AND loop closed.",
+                "Duet daemon.g toggles HB (M42) every second. Nano dead or reset -> Q1 gate pulled low by R2 -> relays off.",
+                "SENSE_LOOP tells the Nano that the loop is closed. A0 = PS_ON with INPUT_PULLUP."],
+         why=["**Why it is worth it:** in step 4 the automatic cut relies on Duet firmware. A frozen Duet with PS_ON active"
+              " keeps the heaters powered. An independent supervisor closes that gap.",
+              "",
+              "Options considered:",
+              "- **74HC123 retriggerable monostable** – no firmware, very robust, but no diagnostics. Good minimal choice.",
+              "- **Arduino Nano (chosen)** – watchdog on HB + PS_ON, reads the loop sense lines (which part opened the loop),"
+              " can latch off until a reset button, room for an independent bed thermistor (A7) later. 5 V logic matches the loop.",
+              "- **ESP32** – Wi-Fi alerts and logging, but 3.3 V, more complex, more ways to fail.",
+              "- **Safety relay (e.g. Pilz PNOZ)** – certified, monitors contacts, but costly and oversized for a hobby printer.",
+              "",
+              "- Fail-safe: Q1 needs an active high gate from the Nano; R2 holds it low during reset or when the Nano is missing.",
+              "- Option (not drawn): second NTC on the bed read by the Nano → independent over-temperature cut-off."]),
+    dict(slug="smoke_detector", title="smoke detector in the loop", stars=3,
+         rating="detects fire from any cause and cuts power without software; late detection; FAIL-UNSAFE when unpowered.",
+         notes=["Step 6: SD119 smoke detector, relay contact C-NC in series with the loop; powered 12 V from step-up U2 (5 V standby).",
+                "Smoke -> NC opens -> K1/K2 drop at once. SENSE_STOP / SENSE_LOOP tell the Nano which part opened the loop.",
+                "WEAK POINT: an unpowered detector keeps NC CLOSED -> the loop looks healthy -> step 7."],
+         why=["**Why it is worth it:** thermal protections watch the bed only. A smoke detector reacts to fire from any cause –"
+              " wiring, PSU, hot end, filament. Its NC contact in the loop drops the relays directly.",
+              "",
+              "- 12 V from a small step-up (MT3608) on the 5 V standby rail – the detector works whenever the printer is plugged in.",
+              "- Sense lines let the Nano report the cause (STOP pressed vs. smoke).",
+              "- **Fail-unsafe:** the detector's relay is energised only in alarm. Without supply (dead step-up, loose wire) the NC"
+              " contact stays closed for ever – the loop looks fine and fire would not cut the power."]),
+    dict(slug="smoke_supervision", title="smoke detector supervision relay K3", stars=5,
+         rating="makes the detector fail-safe: no detector supply = loop open; Nano can tell the cause.",
+         notes=["Step 7: K3 coil on the detector 12 V supply, K3 NO contact in series with the SD119 NC contact.",
+                "No 12 V -> K3 drops -> loop opens -> power off. Nano: STOP ok + SMOKE ok + LOOP open = detector unpowered.",
+                "Detector head removed from base -> C-NC open (relay in the head) -> loop open. Check this on your SD119 base.",
+                "Monthly: press the detector TEST button - the printer must switch off."],
+         why=["**Why it is necessary:** it closes the fail-unsafe gap from step 6. K3 sits in the loop and is held on only by"
+              " the same 12 V that powers the detector. Any loss of that supply opens the loop.",
+              "",
+              "- K3: small 12 V signal relay (G5V-1, 1 A contact – the loop current is ≈ 0.2 A), D3 flyback diode.",
+              "- **Presence check by the Nano** (the alternative you suggested) is included: SENSE_SMOKE is the node between"
+              " SD119 and K3. STOP ok, SMOKE ok, LOOP open → detector unpowered; SMOKE open → smoke (or head removed).",
+              "- Still not covered: a powered detector whose sensor is dead. Use the TEST button regularly.",
+              "",
+              "**Overall after step 7:** two independent hardware paths remove heater power (TH1 on the bed; K1/K2 via the loop),"
+              " the loop is fail-safe (STOP, smoke, detector supply, supervisor, broken wire), and the 230 V side is fused and"
+              " isolated with a 2-pole switch. Remaining: verify Duet 5V_EXT / PS_ON details, use a genuine SSR on a heatsink,"
+              " flexible strain-relieved bed cable, and test every path (STOP, TEST button, unplug HB, pull 12 V) before printing."]),
+]
+
+PARTS = [
+    dict(ref="J1", part="IEC C14 inlet (from step 2: module with fuse drawer)", step=0, stars=0, opinion="–"),
+    dict(ref="SW1", part="1-pole rocker switch", step=0, until=3, stars=1, opinion="breaks only one wire; with a reversed plug that can be N"),
+    dict(ref="PS1", part="PSU 24 V, class I with FG (e.g. Mean Well LRS-350-24)", step=0, stars=0, opinion="–"),
+    dict(ref="J4", part="PE to PSU case (FG)", step=0, stars=3, opinion="essential: insulation fault -> PE instead of live frame"),
+    dict(ref="U1", part="SSR DC->AC 25 A, genuine, on heatsink", step=0, stars=0, opinion="switching element, not a protection; fails shorted"),
+    dict(ref="J3", part="Bed heater 230 V, 3-wire (L, N, PE), flexible cable", step=0, stars=0, opinion="–"),
+    dict(ref="J2, J5", part="Duet 2 WiFi VIN and BED terminals", step=0, stars=0, opinion="–"),
+    dict(ref="TH1", part="Thermal cutoff KSD301 NC 130 °C, 250 V/10 A, on the bed", step=1, stars=4, opinion="independent of SSR and firmware; auto-reset (thermal fuse = latching)"),
+    dict(ref="F1", part="Fuse T6.3A 5x20 (size to load)", step=2, stars=3, opinion="short circuit / overload only"),
+    dict(ref="Q0", part="Main switch 2-pole 16 A", step=3, stars=3, opinion="manual isolation of L and N"),
+    dict(ref="K1, K2", part="Relay Omron G2RL-1A-E 5 V coil, 16 A NO", step=4, stars=4, opinion="removes 230 V from PSU and SSR; fail-safe (needs coil current)"),
+    dict(ref="PS2", part="PSU 5 V 2 A standby, class II (Mean Well IRM-10-5)", step=4, stars=0, opinion="keeps Duet, loop and supervisor alive"),
+    dict(ref="S1", part="Emergency STOP mushroom, latching, 1 NC", step=4, stars=4, opinion="hard-wired, no software in the path"),
+    dict(ref="F2", part="Fuse 0.5 A (5 V loop)", step=4, stars=2, opinion="protects loop wiring"),
+    dict(ref="Q1", part="MOSFET AO3400 (logic-level) + R1 100 Ω, R2 10 kΩ pull-down", step=4, stars=3, opinion="loop driver; pull-down = off when undriven"),
+    dict(ref="D1, D2", part="Diode 1N4148 (coil flyback)", step=4, stars=0, opinion="–"),
+    dict(ref="H1, R4", part="LED + 330 Ω (loop closed)", step=4, stars=1, opinion="indication only"),
+    dict(ref="J6", part="Duet 5V_EXT / GND / PS_ON / HB (expansion header)", step=4, stars=0, opinion="–"),
+    dict(ref="A1", part="Arduino Nano v3 (supervisor firmware)", step=5, stars=4, opinion="independent watchdog; dies safe"),
+    dict(ref="R5..R7", part="10 kΩ pull-downs on sense inputs (added with each sense line)", step=5, stars=0, opinion="–"),
+    dict(ref="D4", part="Schottky 1N5819 into Nano 5V pin (no back-feed from USB)", step=5, stars=0, opinion="–"),
+    dict(ref="B1", part="Smoke detector SD119 (12 V, relay C-NC)", step=6, stars=3, opinion="any-cause fire detection; fail-unsafe alone"),
+    dict(ref="U2", part="Step-up MT3608 5 -> 12 V", step=6, stars=0, opinion="detector supply"),
+    dict(ref="K3", part="Relay G5V-1 12 V coil, 1 A NO + D3 1N4148", step=7, stars=5, opinion="detector supply supervision; makes B1 fail-safe"),
+]

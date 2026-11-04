@@ -1,0 +1,2 @@
+(sym_lib_table (version 7)
+  (lib (name "safety") (type "KiCad") (uri "${KIPRJMOD}/safety.kicad_sym") (options "") (descr "Printer power safety symbols")))

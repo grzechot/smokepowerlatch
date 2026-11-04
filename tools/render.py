@@ -1,4 +1,4 @@
-"""ERC + PNG preview of every step (Windows: KiCad 10 CLI + headless Edge + Pillow).
+"""ERC + PNG preview of every variant (Windows: KiCad 10 CLI + headless Edge + Pillow).
 
 Usage:  python tools/render.py
 """
@@ -31,11 +31,11 @@ def erc(sch, tmp):
 
 def main():
     with tempfile.TemporaryDirectory() as tmp:
-        for sch in sorted(glob.glob(os.path.join(ROOT, "kicad", "steps", "step*.kicad_sch"))):
-            n = re.search(r"step(\d+)", sch).group(1)
+        for sch in sorted(glob.glob(os.path.join(ROOT, "kicad", "steps", "*.kicad_sch"))):
+            n = os.path.basename(sch).split("_")[0]
             (tot, err, warn), issues = erc(sch, tmp)
-            render(sch, os.path.join(ROOT, "docs", "img", "step%s.png" % n), tmp)
-            print("step%s  ERC errors %s warnings %s  %s" % (n, err, warn, sorted(set(i[0] for i in issues))))
+            render(sch, os.path.join(ROOT, "docs", "img", "%s.png" % n), tmp)
+            print("%-4s  ERC errors %s warnings %s  %s" % (n, err, warn, sorted(set(i[0] for i in issues))))
     print("PODSUMOWANIE: PNG in docs/img")
 
 if __name__ == "__main__":

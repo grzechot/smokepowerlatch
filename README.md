@@ -38,6 +38,12 @@ python tools/render.py
 
 The schematics are generated: edit the generator (or edit in KiCad and stop regenerating that file).
 
+## Enclosures (work in progress)
+
+[enclosures/](enclosures/) – 3D-printable enclosures. **Draft versions: they will be modified, and more
+enclosures will be added.** First one: the 230 V mains module (relays K1, K2, 5 V standby PSU),
+[enclosures/mains_module_v4](enclosures/mains_module_v4/) – STL, STEP and OpenSCAD source.
+
 ## Status
 
 Design study – **not built, not tested on hardware**. ERC: A0–A3 clean; A4–A6 report one expected error (the 0 V outputs of PS1 and PS2 are

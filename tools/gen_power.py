@@ -226,13 +226,14 @@ class Sheet:
 # ---------------------------------------------------------------- the circuit, stage by stage
 YL, YN, YPE = 215.9, 226.06, 238.76      # mains rails
 YB = 195.58                              # mains / low-voltage boundary = centre line of PSUs and SSR
-YC, YD, YT = 167.64, 162.56, 157.48      # K1 coil, its flyback diode, supply tap
+YC, YD, YT = 189.23, 184.15, 157.48      # K1 coil, its flyback diode, supply tap
 YDU = 50.8                               # Duet terminal row
-XO, X5, XK = 96.52, 101.6, 114.3         # PS2 0 V and +5 V lines, K1
-XA1, XA2 = 109.22, 119.38                # K1 coil A1 / A2 = K1 contact 13 / 14
+XO, X5, XK = 91.44, 96.52, 115.57        # PS2 0 V and +5 V lines, K1
+XA1, XA2 = 110.49, 120.65                # K1 coil A1 / A2 = K1 contact 13 / 14
 XPS, XHB = 180.34, 185.42                # Duet PS_ON, HB
 X0P, X24 = 193.04, 198.12                # PS1 0 V and +24 V lines
-B0, B5 = 104.14, 106.68                  # bundle: 0 V, 5 V (OK runs on XA1)
+B0, B5 = 107.95, 109.22                  # bundle: 0 V, 5 V (OK runs on XA1)
+YJ = 55.88                               # 5 V jog from X5 to the Duet 5V_EXT
 
 def build(v):
     S = Sheet("Printer power safety – %s %s" % (v["code"], v["title"]))
@@ -245,7 +246,7 @@ def build(v):
     S.wire(J1["3"], (38.1, J1["3"][1]), (38.1, YPE), c=PE)
     S.place("#FLG01", "power", "PWR_FLAG", "PWR_FLAG", at=(43.18, YL))
     S.place("#FLG02", "power", "PWR_FLAG", "PWR_FLAG", at=(43.18, YN), rot=180)
-    lx, lg = [35.56, 43.18, 86.36, 91.44], []
+    lx, lg = [35.56, 43.18, 86.36, 101.6], []
     nx, ng = [35.56, 43.18, 86.36], []
     pex = [38.1, 86.36]
 
@@ -255,27 +256,27 @@ def build(v):
         lx += [46.99, 54.61]; lg.append((46.99, 54.61))
     S.place("SW1", "Switch", "SW_SPST", "1-pole", at=(66.04, YL), ref_at=(63.5, 210.82), val_at=(62.23, 213.36))
     lx += [60.96, 71.12]; lg.append((60.96, 71.12))
-    S.place("#FLG03", "power", "PWR_FLAG", "PWR_FLAG", at=(91.44, YL))
+    S.place("#FLG03", "power", "PWR_FLAG", "PWR_FLAG", at=(101.6, YL))
     S.box(76.2, YL - 3.81, 83.82, YN + 3.81, GRAY, 0.2); S.text("X1 Wago", 75.57, YL - 4.45, 1.0)
     for t, y in (("L", YL), ("N", YN), ("PE", YPE)):
         S.label(t, 86.36, y)
 
     # --- PS2 5 V standby, fed before K1
     if standby:
-        PS2 = S.place("PS2", "Converter_ACDC", "IRM-10-5", "5 V standby", at=(99.06, YB), rot=90, mirror=True,
-                      ref_at=(84.07, 193.04), val_at=(76.2, 199.39))
+        PS2 = S.place("PS2", "Converter_ACDC", "IRM-10-5", "5 V standby", at=(93.98, YB), rot=90, mirror=True,
+                      ref_at=(81.28, 193.04), val_at=(76.2, 199.39))
         assert PS2["2"][0] == X5 and PS2["1"][0] == XO and PS2["3"][0] == XO and PS2["4"][0] == X5
         S.wire(PS2["2"], (X5, YL), c=L); S.wire(PS2["1"], (XO, YN), c=N)
         lx.append(X5); nx.append(XO)
 
     # --- K1 relay in N: contact on the N rail, coil straight above it
     if relay:
-        S.place("K1", "safety", "RELAY_SPLIT", "", at=(XK, YN), unit=2, ref_at=(112.4, 223.52), hide_val=True)
+        S.place("K1", "safety", "RELAY_SPLIT", "", at=(XK, YN), unit=2, ref_at=(115.57, 222.25), hide_val=True)
         nx += [XA1, XA2, 124.46]; ng.append((XA1, XA2))
         S.place("#FLG04", "power", "PWR_FLAG", "PWR_FLAG", at=(124.46, YN), rot=180)
         K1 = S.place("K1", "safety", "RELAY_SPLIT", "%s V coil, 16 A" % ("5" if standby else "24"), at=(XK, YC), unit=1,
-                     ref_at=(99.0, 172.72), val_at=(88.0, 175.26))
-        D1 = S.place("D1", "Device", "D", "1N4148", at=(XK, YD), ref_at=(112.4, 160.02), hide_val=True)
+                     ref_at=(115.57, 193.04), val_at=(132.08, 193.04))
+        D1 = S.place("D1", "Device", "D", "1N4148", at=(XK, YD), ref_at=(115.57, 181.61), hide_val=True)
         S.wire(K1["A1"], (XA1, YD), D1["1"]); S.wire(D1["2"], (XA2, YD), K1["A2"])
         S.line([(XK, YC + 1.9), (XK, YN - 2.0)], GRAY)
         if not standby:                          # A3: START at 230 V across the K1 contact, coil from 24 V
@@ -294,7 +295,7 @@ def build(v):
     S.vline(X24, [PS1["3"][1], YDU] + ([YT] if relay and not standby else []), c=V24)
     if relay and not standby:
         S.label("24V", X24, YT)
-    S.vline(X0P, [PS1["4"][1], YDU] + ([63.5] if standby else []) + ([180.34] if nano else []), c=V0)
+    S.vline(X0P, [PS1["4"][1], YDU] + ([63.5] if standby else []) + ([176.53] if nano else []), c=V0)
     S.place("J4", "Connector", "Screw_Terminal_01x01", "PE stud (PS1 earth)", anchor=("1", (203.2, YPE)), rot=270,
             ref_at=(206.0, 243.84), val_at=(206.0, 246.38))
     pex.append(203.2)
@@ -324,13 +325,14 @@ def build(v):
 
     # --- 5 V standby lines from PS2 up to the Duet
     if standby:
-        S.vline(XO, [PS2["3"][1], 63.5, YDU] + ([165.1] if smoke else []), c=V0)
-        S.vline(X5, [PS2["4"][1], YDU] + ([170.18] if smoke else [YT]) + ([58.42] if nano else []), c=V5)
+        S.vline(XO, [PS2["3"][1], 63.5, YDU] + ([168.91] if smoke else []), c=V0); S.wire((XO, YDU), (96.52, YDU), c=V0)
+        S.vline(X5, [PS2["4"][1], YJ] + ([170.18] if smoke else [YT]) + ([60.96] if nano else []), c=V5)
+        S.wire((X5, YJ), (101.6, YJ), (101.6, YDU), c=V5)
         S.label("0V", XO, 63.5); S.label("0V", X0P, 63.5)
         if not smoke:                            # A4: K1 coil fed straight from 5 V
             S.wire((X5, YT), (XA1, YT), (XA1, YD), c=V5)
         if nano:
-            S.label("5V", X5, 58.42)
+            S.label("5V", X5, 60.96)
 
     if smoke:
         detector(S, nano)
@@ -350,46 +352,48 @@ def build(v):
     return S
 
 def detector(S, nano):
-    """Detector module mounted high; 3-wire bundle 5V / 0V / OK down to PS2 and the K1 coil."""
-    S.box(102.87, 58.42, 175.26, 121.92, GRAY, 0.2)
-    S.text("Detector module (mounted high)", 114.3, 120.65, 1.27, True)
+    """Detector module mounted high, drawn top-down: U2, SD119, K3; 3-wire bundle 5V / 0V / OK down to PS2 and the K1 coil."""
+    S.box(104.14, 60.96, 148.59, 133.35, GRAY, 0.2)
+    S.text("Detector module (mounted high)", 113.03, 132.08, 1.27, True)
     # bundle: 0 V and 5 V split at PS2, OK goes straight down to the K1 coil
-    S.wire((XO, 165.1), (B0, 165.1), (B0, 66.04), c=V0)
-    S.wire((X5, 170.18), (B5, 170.18), c=V5); S.vline(B5, [170.18, 99.06, 71.12], c=V5)
-    S.vline(XA1, [116.84, YD] + ([147.32] if nano else []), c=V5)
-    S.line([(102.87, 125.73), (111.76, 125.73), (111.76, 154.94), (102.87, 154.94)], GRAY, 0.15, True)
-    S.text("W1 bundle", 113.03, 133.35, 1.0); S.text("5V / 0V / OK", 113.03, 135.89, 1.0)
-    # U2 5 -> 12 V; IN- and OUT- both connected
-    U2 = S.place("U2", "safety", "DCDC_STEPUP", "MT3608 5->12 V", at=(121.92, 68.58), ref_at=(118.0, 62.23), val_at=(115.0, 77.47))
+    S.wire((XO, 168.91), (B0, 168.91), (B0, 66.04), c=V0)
+    S.wire((X5, 170.18), (B5, 170.18), c=V5); S.vline(B5, [170.18, 78.74, 71.12], c=V5)
+    S.vline(XA1, [115.57, YD] + ([152.4] if nano else []), c=V5)
+    S.line([(105.41, 139.7), (111.76, 139.7), (111.76, 149.86), (105.41, 149.86)], GRAY, 0.15, True)
+    S.text("W1 bundle", 113.03, 143.51, 1.0); S.text("5V / 0V / OK", 113.03, 146.05, 1.0)
+    # U2 5 -> 12 V; IN- and OUT- are the same copper, both drawn connected
+    U2 = S.place("U2", "safety", "DCDC_STEPUP", "MT3608 5->12 V", at=(121.92, 68.58), ref_at=(121.92, 62.23), val_at=(127.0, 76.2))
     S.wire((B0, 66.04), U2["2"], c=V0); S.wire((B5, 71.12), U2["1"], c=V5)
-    S.wire(U2["4"], (170.18, 66.04), (170.18, 88.9), c=V0); S.rail(88.9, [147.32, 157.48, 162.56, 170.18], c=V0)
-    S.wire(U2["3"], (137.16, 71.12), c=V12); S.vline(137.16, [71.12, 78.74, 92.71], c=V12)
-    S.rail(78.74, [137.16, 157.48, 162.56], c=V12)
-    S.text("12 V", 139.7, 77.47, 1.0); S.label("0V", 170.18, 88.9)
-    # SD119 and the K3 coil in parallel across 12 V / 0 V
-    SD = S.place("B1", "safety", "SMOKE_DET", "SD119 (NC)", at=(142.24, 99.06), ref_at=(139.0, 106.68), val_at=(136.0, 109.22))
-    S.wire((147.32, 88.9), SD["2"], c=V0)
-    S.place("K3", "safety", "RELAY_SPLIT", "12 V coil", at=(157.48, 83.82), rot=270, unit=1, ref_at=(150.5, 82.55), val_at=(141.0, 85.09))
-    D3 = S.place("D3", "Device", "D", "1N4148", at=(162.56, 83.82), rot=270, ref_at=(164.0, 83.82), hide_val=True)
-    S.wire((162.56, 78.74), D3["1"], c=V12); S.wire(D3["2"], (162.56, 88.9), c=V0)
-    # chain from 5 V: SD119 C-NC, K3 NO -> OK
-    S.wire((B5, 99.06), SD["3"], c=V5)
-    S.place("K3", "safety", "RELAY_SPLIT", "", at=(157.48, 99.06), unit=2, ref_at=(155.0, 104.14), hide_val=True)
-    S.line([(157.48, 90.3), (157.48, 97.5)], GRAY)
-    S.wire((162.56, 99.06), (162.56, 116.84), (XA1, 116.84), c=V5)
-    S.text("OK", 150.0, 115.57, 1.0)
+    S.wire(U2["4"], (139.7, 66.04), c=V0); S.vline(139.7, [66.04, 93.98, 114.3], c=V0)
+    S.wire(U2["3"], (134.62, 71.12), c=V12); S.vline(134.62, [71.12, 83.82, 104.14, 105.41], c=V12)
+    S.text("12 V", 135.89, 77.47, 1.0); S.label("0V", 139.7, 93.98)
+    # SD119: C from 5 V on top, NC down to K3; supply from the right
+    SD = S.place("B1", "safety", "SMOKE_DET", "SD119 (NC)", at=(118.11, 88.9), rot=270, ref_at=(121.92, 99.06), val_at=(127.0, 101.6))
+    S.wire((B5, 78.74), SD["3"], c=V5)
+    S.wire(SD["1"], (134.62, 83.82), c=V12); S.wire(SD["2"], (139.7, 93.98), c=V0)
+    # K3: NO contact in the chain, coil and D3 across 12 V / 0 V
+    K3B = S.place("K3", "safety", "RELAY_SPLIT", "", at=(118.11, 109.22), unit=2, rot=270, ref_at=(114.3, 109.22), hide_val=True)
+    S.wire(SD["4"], K3B["13"], c=V5)
+    K3 = S.place("K3", "safety", "RELAY_SPLIT", "12 V coil", at=(129.54, 109.22), rot=270, unit=1, ref_at=(129.54, 118.11), val_at=(129.54, 120.65))
+    S.line([(119.63, 109.22), (127.6, 109.22)], GRAY)
+    D3 = S.place("D3", "Device", "D", "1N4148", at=(134.62, 109.22), rot=270, ref_at=(137.16, 109.22), hide_val=True)
+    S.wire(K3["A1"], (134.62, 104.14), c=V12); S.wire(D3["2"], (134.62, 114.3), c=V0)
+    S.wire(K3["A2"], (134.62, 114.3), (139.7, 114.3), c=V0)
+    # chain output OK
+    S.wire((118.11, 114.3), (118.11, 115.57), (XA1, 115.57), c=V5)
+    S.text("OK", 111.76, 124.46, 1.0)
 
 def supervisor(S, K1):
     """A6: Nano drives Q1 on the low side of the K1 coil; Duet PS_ON and HB go to the Nano."""
-    Q1 = S.place("Q1", "Device", "Q_NMOS", "AO3400", anchor=("D", (127, YC)), mirror=True, ref_at=(131.0, 177.8), val_at=(131.0, 185.42))
+    Q1 = S.place("Q1", "Device", "Q_NMOS", "AO3400", anchor=("D", (127, YC)), rot=180, ref_at=(132.08, 189.23), val_at=(132.08, 191.77))
     S.wire(K1["A2"], Q1["D"], c=SIG)
-    R1 = S.place("R1", "Device", "R", "100", anchor=("1", Q1["G"]), rot=90, ref_at=(137.16, 170.18), hide_val=True)
-    R2 = S.place("R2", "Device", "R", "10k", anchor=("1", R1["2"]), ref_at=(143.5, 177.8), val_at=(143.5, 180.0))
+    R1 = S.place("R1", "Device", "R", "100", anchor=("1", Q1["G"]), rot=90, ref_at=(138.43, 181.61), hide_val=True)
+    R2 = S.place("R2", "Device", "R", "10k", anchor=("2", R1["2"]), ref_at=(146.05, 179.07), val_at=(146.05, 181.61))
     S.wire(R1["2"], (147.32, R1["2"][1]), c=SIG); S.label("GATE", 147.32, R1["2"][1])
-    S.wire(Q1["S"], (127, 180.34), R2["2"], (X0P, 180.34), c=V0)
+    S.wire(Q1["S"], (127, 176.53), R2["1"], (X0P, 176.53), c=V0)
     S.wire((XPS, YDU), (XPS, 60.96), c=SIG); S.label("PS_ON", XPS, 60.96)
     S.wire((XHB, YDU), (XHB, 55.88), c=SIG); S.label("HB", XHB, 55.88)
-    S.label("OK", XA1, 147.32)
+    S.label("OK", XA1, 152.4)
     A = S.place("A1", "MCU_Module", "Arduino_Nano_v3.x", "Nano supervisor", at=(60.96, 109.22), ref_at=(50.8, 81.28), val_at=(40.64, 78.74))
     for pin, name in (("5", "GATE"), ("6", "PS_ON"), ("7", "HB"), ("8", "OK")):
         y = A[pin][1]

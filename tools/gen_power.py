@@ -1,13 +1,14 @@
-"""Generate the printer power-safety schematics, variant by variant (KiCad 10).
+"""Generate the printer power-safety schematics, stage by stage (KiCad 10).
 
 Usage:  python tools/gen_power.py            (from the repo root)
-Writes kicad/safety.kicad_sym, kicad/steps/<code>_*.kicad_sch, kicad/printer_power_safety.kicad_sch (= FULL)
-and docs/steps.md + docs/bom.md. Rendering to PNG: tools/render.py.
-Variants and their hierarchy (A core, B diagnostics, C service): tools/steps_text.py.
+Writes kicad/safety.kicad_sym, kicad/steps/<code>_*.kicad_sch, kicad/printer_power_safety.kicad_sch (= A6)
+and docs/steps.md + docs/bom.md. Rendering to PNG: tools/render.py. Stages and parts: tools/steps_text.py.
 
-Layout: ladder diagram. Mains harness = three horizontal rails (L, N, PE) at the top, loads tap down.
-Low-voltage harness = +5V / GND rails at the bottom, the 5 V safety loop is one horizontal rung.
-Signal lines (PS_ON, HB, SENSE_*) use net labels; power lines are drawn as wires.
+Layout follows the sketches (tools/sketches.py): mains 230 V at the bottom with straight L / N / PE rails, loads
+added to the right in wiring order; PSUs, SSR and relay coils straddle the boundary; low voltage above, DC and
+signal lines run vertically up to the Duet. The detector module sits high, a 3-wire bundle (5V / 0V / OK) runs
+down and splits at PS2. Wire colours as bought: L brown, N blue, PE green-yellow, 0 V black, 5 V red, 12 V yellow,
+24 V orange, signals purple.
 """
 import os, uuid, copy
 from sexp import parse, dump, find, uq
@@ -16,59 +17,83 @@ from steps_text import VARIANTS, PARTS, FEAT_CODE
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KLIB = "C:/Program Files/KiCad/10.0/share/kicad/symbols/"
 PROJECT = "printer_power_safety"
+DATE = "261105"
 q = lambda s: '"%s"' % str(s).replace('"', '\\"')
 U = lambda: q(uuid.uuid4())
-RED, BLUE = "200 0 0", "0 0 194"
+RED, BLUE, GRAY = "200 0 0", "0 0 194", "95 94 90"
+L, N, PE = "153 60 29", "55 138 221", "99 153 34"
+V0, V5, V12, V24, SIG = "44 44 42", "226 75 74", "239 159 39", "216 90 48", "127 119 221"
 
 # ---------------------------------------------------------------- project symbol library
+F127 = '(effects (font (size 1.27 1.27)))'
+def _pin(kind, x, y, ang, name, num, length=2.54):
+    return '(pin %s line (at %s %s %d) (length %s) (name %s %s) (number %s %s))' % (kind, x, y, ang, length, q(name), F127, q(num), F127)
+
+def _props(ref, val, desc, ry, vy):
+    return ('(property "Reference" %s (at 0 %s 0) %s) (property "Value" %s (at 0 %s 0) %s)'
+            ' (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))'
+            ' (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))'
+            ' (property "Description" %s (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))') % (q(ref), ry, F127, q(val), vy, F127, q(desc))
+
+# Duet 2 WiFi: one block with the used terminals at the bottom; pin x = layout x - 165.1 (placed at 165.1, 38.1)
+DUET_PINS = [("GND", 96.52), ("5V_EXT", 101.6), ("PS_ON", 180.34), ("HB", 185.42),
+             ("VIN-", 193.04), ("VIN+", 198.12), ("BED-", 226.06), ("BED+", 231.14)]
+DUET_AT = (165.1, 38.1)
+
 SAFETY_LIB = '''(kicad_symbol_lib (version 20241209) (generator "gen_power")
  (symbol "RELAY_SPLIT" (pin_names (offset 0.254) (hide yes)) (exclude_from_sim no) (in_bom yes) (on_board yes)
-  (property "Reference" "K" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
-  (property "Value" "RELAY_SPLIT" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
-  (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
-  (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
-  (property "Description" "Relay drawn as separate units: A = coil, B = NO contact" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  %s
   (symbol "RELAY_SPLIT_1_1"
    (rectangle (start -2.54 -1.524) (end 2.54 1.524) (stroke (width 0.254) (type default)) (fill (type background)))
-   (pin passive line (at -5.08 0 0) (length 2.54) (name "A1" (effects (font (size 1.27 1.27)))) (number "A1" (effects (font (size 1.27 1.27)))))
-   (pin passive line (at 5.08 0 180) (length 2.54) (name "A2" (effects (font (size 1.27 1.27)))) (number "A2" (effects (font (size 1.27 1.27))))))
+   %s %s)
   (symbol "RELAY_SPLIT_2_1"
    (polyline (pts (xy -2.54 0) (xy 2.286 1.778)) (stroke (width 0.254) (type default)) (fill (type none)))
    (polyline (pts (xy 2.54 0) (xy 2.54 0.762)) (stroke (width 0.254) (type default)) (fill (type none)))
-   (pin passive line (at -5.08 0 0) (length 2.54) (name "13" (effects (font (size 1.27 1.27)))) (number "13" (effects (font (size 1.27 1.27)))))
-   (pin passive line (at 5.08 0 180) (length 2.54) (name "14" (effects (font (size 1.27 1.27)))) (number "14" (effects (font (size 1.27 1.27)))))))
+   %s %s))
  (symbol "SMOKE_DET" (pin_names (offset 0.254) (hide yes)) (exclude_from_sim no) (in_bom yes) (on_board yes)
-  (property "Reference" "B" (at 0 6.35 0) (effects (font (size 1.27 1.27))))
-  (property "Value" "SMOKE_DET" (at 0 8.89 0) (effects (font (size 1.27 1.27))))
-  (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
-  (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
-  (property "Description" "Smoke detector, 12 V, relay output C-NC (NC opens on alarm; NC is CLOSED when unpowered)" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  %s
   (symbol "SMOKE_DET_0_1"
    (rectangle (start -7.62 -3.81) (end 7.62 3.81) (stroke (width 0.254) (type default)) (fill (type background)))
    (polyline (pts (xy -7.62 0) (xy -2.54 0) (xy 3.302 -1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
    (polyline (pts (xy 2.54 -1.524) (xy 2.54 0) (xy 7.62 0)) (stroke (width 0.254) (type default)) (fill (type none)))
-   (text "+12V" (at -5.08 -2.794 0) (effects (font (size 0.889 0.889))))
-   (text "0V" (at 5.08 -2.794 0) (effects (font (size 0.889 0.889))))
-   (text "C" (at -6.35 1.27 0) (effects (font (size 0.889 0.889))))
-   (text "NC" (at 5.715 1.27 0) (effects (font (size 0.889 0.889)))))
-  (symbol "SMOKE_DET_1_1"
-   (pin passive line (at -10.16 0 0) (length 2.54) (name "C" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
-   (pin passive line (at 10.16 0 180) (length 2.54) (name "NC" (effects (font (size 1.27 1.27)))) (number "4" (effects (font (size 1.27 1.27)))))
-   (pin power_in line (at -5.08 -6.35 90) (length 2.54) (name "+12V" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
-   (pin power_in line (at 5.08 -6.35 90) (length 2.54) (name "0V" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))))
+   (text "+12V" (at -5.08 2.794 0) (effects (font (size 0.889 0.889))))
+   (text "0V" (at 5.08 2.794 0) (effects (font (size 0.889 0.889))))
+   (text "C" (at -6.35 -1.27 0) (effects (font (size 0.889 0.889))))
+   (text "NC" (at 5.715 -1.27 0) (effects (font (size 0.889 0.889)))))
+  (symbol "SMOKE_DET_1_1" %s %s %s %s))
  (symbol "DCDC_STEPUP" (pin_names (offset 0.254)) (exclude_from_sim no) (in_bom yes) (on_board yes)
-  (property "Reference" "U" (at 0 6.35 0) (effects (font (size 1.27 1.27))))
-  (property "Value" "DCDC_STEPUP" (at 0 -8.89 0) (effects (font (size 1.27 1.27))))
-  (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
-  (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
-  (property "Description" "Non-isolated step-up module, common GND" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  %s
   (symbol "DCDC_STEPUP_0_1"
    (rectangle (start -7.62 -5.08) (end 7.62 5.08) (stroke (width 0.254) (type default)) (fill (type background))))
-  (symbol "DCDC_STEPUP_1_1"
-   (pin power_in line (at -10.16 2.54 0) (length 2.54) (name "IN+" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
-   (pin power_out line (at 10.16 2.54 180) (length 2.54) (name "OUT+" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
-   (pin passive line (at 0 -7.62 90) (length 2.54) (name "GND" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27))))))))
-'''
+  (symbol "DCDC_STEPUP_1_1" %s %s %s %s))
+ (symbol "PLUG_2P" (pin_names (offset 0.254) (hide yes)) (pin_numbers (hide yes)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+  %s
+  (symbol "PLUG_2P_0_1"
+   (rectangle (start -2.54 1.778) (end 2.54 -11.938) (stroke (width 0.254) (type default)) (fill (type background)))
+   (polyline (pts (xy -2.54 0) (xy 2.54 0)) (stroke (width 0.254) (type dash)) (fill (type none)))
+   (polyline (pts (xy -2.54 -10.16) (xy 2.54 -10.16)) (stroke (width 0.254) (type dash)) (fill (type none))))
+  (symbol "PLUG_2P_1_1" %s %s %s %s))
+ (symbol "DUET2" (pin_names (offset 0.762)) (pin_numbers (hide yes)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+  %s
+  (symbol "DUET2_0_1"
+   (rectangle (start -76.2 10.16) (end 73.66 -10.16) (stroke (width 0.254) (type default)) (fill (type background)))
+   (text "Duet 2 WiFi" (at 0 2.54 0) (effects (font (size 2.54 2.54) (bold yes)))))
+  (symbol "DUET2_1_1" %s)))
+''' % (
+    _props("K", "RELAY_SPLIT", "Relay drawn as separate units: A = coil, B = NO contact", 3.81, -3.81),
+    _pin("passive", -5.08, 0, 0, "A1", "A1"), _pin("passive", 5.08, 0, 180, "A2", "A2"),
+    _pin("passive", -5.08, 0, 0, "13", "13"), _pin("passive", 5.08, 0, 180, "14", "14"),
+    _props("B", "SMOKE_DET", "Smoke detector, 12 V, relay output C-NC (NC opens on alarm; NC is CLOSED when unpowered)", -6.35, -8.89),
+    _pin("passive", -10.16, 0, 0, "C", "3"), _pin("passive", 10.16, 0, 180, "NC", "4"),
+    _pin("power_in", -5.08, 6.35, 270, "+12V", "1"), _pin("power_in", 5.08, 6.35, 270, "0V", "2"),
+    _props("U", "DCDC_STEPUP", "Non-isolated step-up module; IN- and OUT- are the same copper, connect both", 6.35, -6.35),
+    _pin("passive", -10.16, 2.54, 0, "IN-", "2"), _pin("power_in", -10.16, -2.54, 0, "IN+", "1"),
+    _pin("passive", 10.16, 2.54, 180, "OUT-", "4"), _pin("power_out", 10.16, -2.54, 180, "OUT+", "3"),
+    _props("J", "PLUG_2P", "2-pole plug and socket, mated: 1-3 = L, 2-4 = N", 3.81, -14.605),
+    _pin("passive", -5.08, 0, 0, "L", "1"), _pin("passive", -5.08, -10.16, 0, "N", "2"),
+    _pin("passive", 5.08, 0, 180, "L", "3"), _pin("passive", 5.08, -10.16, 180, "N", "4"),
+    _props("U", "DUET2", "Duet 2 WiFi, only the terminals used here", 12.7, -12.7),
+    " ".join(_pin("passive", round(x - DUET_AT[0], 2), -12.7, 90, n, str(i + 1)) for i, (n, x) in enumerate(DUET_PINS)))
 
 _libs = {}
 def lib_table(lib):
@@ -105,10 +130,8 @@ def sym_pins(s, unit):
     return out
 
 def xform(px, py, rot, mirror):
-    if mirror:
-        px = -px
     px, py = {0: (px, py), 90: (-py, px), 180: (-px, -py), 270: (py, -px)}[rot]
-    return px, -py                               # screen y grows downwards
+    return (-px if mirror else px), -py          # KiCad rotates, then mirrors; screen y grows downwards
 
 # ---------------------------------------------------------------- schematic builder
 class Sheet:
@@ -128,9 +151,8 @@ class Sheet:
         pp = {n: (round(x + dx, 2), round(y + dy, 2)) for n, (dx, dy) in rel.items()}
         power = ref.startswith("#")
         self.pins += list(pp.values())
-        if not power:
-            if nc:
-                self.nc_pins += list(pp.values())
+        if not power and nc:
+            self.nc_pins += list(pp.values())
         rx, ry = ref_at or (x, y - 6)
         vx, vy = val_at or (x, y + 6)
         F = '(effects (font (size 1.27 1.27))%s)'
@@ -146,45 +168,53 @@ class Sheet:
         self.items.append(t)
         return pp
 
-    def wire(self, *pts):
+    def wire(self, *pts, c=None):
         for a, b in zip(pts, pts[1:]):
             if a != b:
-                self.wires.append((tuple(map(lambda v: round(v, 2), a)), tuple(map(lambda v: round(v, 2), b))))
+                self.wires.append((tuple(round(v, 2) for v in a), tuple(round(v, 2) for v in b), c))
 
-    def rail(self, y, xs, gaps=()):
+    def rail(self, y, xs, gaps=(), c=None):
         """Horizontal rail through the sorted points xs; no wire inside the (xa, xb) gaps of series parts."""
         xs = sorted(set(round(v, 2) for v in xs))
         for a, b in zip(xs, xs[1:]):
             if not any(ga <= a and b <= gb for ga, gb in gaps):
-                self.wire((a, y), (b, y))
+                self.wire((a, y), (b, y), c=c)
+
+    def vline(self, x, ys, c=None):
+        """Vertical line through the points ys (split there, so taps and labels connect)."""
+        ys = sorted(set(round(v, 2) for v in ys))
+        for a, b in zip(ys, ys[1:]):
+            self.wire((x, a), (x, b), c=c)
 
     def label(self, t, x, y, rot=0):
-        just = "left bottom"
-        self.items.append('(label %s (at %s %s %d) (effects (font (size 1.27 1.27)) (justify %s)) (uuid %s))' % (q(t), x, y, rot, just, U()))
-        self.nc_pins.append(None)
+        self.items.append('(label %s (at %s %s %d) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid %s))' % (q(t), x, y, rot, U()))
 
     def text(self, t, x, y, size=1.27, bold=False, color=None):
         c = " (color %s 1)" % color if color else ""
         self.items.append('(text %s (exclude_from_sim no) (at %s %s 0) (effects (font (size %s %s)%s%s) (justify left bottom)) (uuid %s))' % (
             q(t), x, y, size, size, " (bold yes)" if bold else "", c, U()))
 
-    def outline(self, pts, color):
-        p = " ".join("(xy %s %s)" % xy for xy in pts + [pts[0]])
-        self.items.append('(polyline (pts %s) (stroke (width 0.3) (type dash) (color %s 1)) (fill (type none)) (uuid %s))' % (p, color, U()))
+    def line(self, pts, color, width=0.15, closed=False):
+        p = " ".join("(xy %s %s)" % xy for xy in pts + (pts[:1] if closed else []))
+        self.items.append('(polyline (pts %s) (stroke (width %s) (type dash) (color %s 1)) (fill (type none)) (uuid %s))' % (p, width, color, U()))
+
+    def box(self, x1, y1, x2, y2, color, width=0.3):
+        self.line([(x1, y1), (x2, y1), (x2, y2), (x1, y2)], color, width, True)
 
     def write(self, path, date, rev):
         from collections import Counter
         ends = Counter()
-        for a, b in self.wires:
+        for a, b, _ in self.wires:
             ends[a] += 1; ends[b] += 1
         pincount = Counter(self.pins)
         body = list(self.items)
-        for a, b in self.wires:
-            body.append('(wire (pts (xy %s %s) (xy %s %s)) (stroke (width 0) (type default)) (uuid %s))' % (a[0], a[1], b[0], b[1], U()))
+        for a, b, c in self.wires:
+            col = "(color %s 1)" % c if c else ""
+            body.append('(wire (pts (xy %s %s) (xy %s %s)) (stroke (width 0) (type default)%s) (uuid %s))' % (a[0], a[1], b[0], b[1], col, U()))
         for p in set(ends) | set(pincount):
             if ends[p] + pincount[p] >= 3 and ends[p] >= 2:
                 body.append('(junction (at %s %s) (diameter 0) (color 0 0 0 0) (uuid %s))' % (p[0], p[1], U()))
-        for p in set(x for x in self.nc_pins if x):
+        for p in set(self.nc_pins):
             if ends[p] == 0 and pincount[p] == 1:
                 body.append('(no_connect (at %s %s) (uuid %s))' % (p[0], p[1], U()))
         hdr = '(kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0") (uuid %s) (paper "A3")\n' % q(self.root)
@@ -193,292 +223,234 @@ class Sheet:
         tail = '\n(sheet_instances (path "/" (page "1")))\n(embedded_fonts no))\n'
         open(path, "w", encoding="utf8").write(hdr + libs + "\n".join(body) + tail)
 
-# ---------------------------------------------------------------- the circuit, step by step
-YL, YN, YPE = 50.8, 55.88, 60.96         # mains rails
-Y5, YG = 203.2, 208.28                   # low-voltage rails
-YR = 154.94                              # 5 V safety loop rung
+# ---------------------------------------------------------------- the circuit, stage by stage
+YL, YN, YPE = 215.9, 226.06, 238.76      # mains rails
+YB = 195.58                              # mains / low-voltage boundary = centre line of PSUs and SSR
+YC, YD, YT = 167.64, 162.56, 157.48      # K1 coil, its flyback diode, supply tap
+YDU = 50.8                               # Duet terminal row
+XO, X5, XK = 96.52, 101.6, 114.3         # PS2 0 V and +5 V lines, K1
+XA1, XA2 = 109.22, 119.38                # K1 coil A1 / A2 = K1 contact 13 / 14
+XPS, XHB = 180.34, 185.42                # Duet PS_ON, HB
+X0P, X24 = 193.04, 198.12                # PS1 0 V and +24 V lines
+B0, B5 = 104.14, 106.68                  # bundle: 0 V, 5 V (OK runs on XA1)
 
 def build(v):
-    S = Sheet("Printer power safety – %s: %s" % (v["code"], v["title"]))
+    S = Sheet("Printer power safety – %s %s" % (v["code"], v["title"]))
     has = lambda f: f in v["feats"]
+    relay, standby, smoke, nano = has("relay"), has("standby"), has("smoke"), has("nano")
 
-    # --- inlet J1 and its flags
-    J1 = S.place("J1", "Connector", "IEC_60320_C14_Receptacle", "C14 inlet" + (" + fuse drawer" if has("fuse") else ""), at=(25.4, 63.5),
-                 ref_at=(22.86, 53.34), val_at=(25.4, 73.66))
-    S.wire(J1["1"], (36.83, J1["1"][1]), (36.83, YL))
-    S.wire(J1["2"], (39.37, J1["2"][1]), (39.37, YN))
-    S.wire(J1["3"], (41.91, J1["3"][1]), (41.91, YPE))
-    S.place("#FLG01", "power", "PWR_FLAG", "PWR_FLAG", at=(44.45, YL))
-    S.place("#FLG02", "power", "PWR_FLAG", "PWR_FLAG", at=(49.53, YN), rot=180)
+    # --- inlet J1; PE leaves at once and bypasses X1
+    J1 = S.place("J1", "Connector", "IEC_60320_C14_Receptacle", "C14 inlet" + (" + fuse drawer" if has("fuse") else ""),
+                 anchor=("1", (35.56, YL)), ref_at=(20.32, 208.28), val_at=(17.78, 233.68))
+    S.wire(J1["3"], (38.1, J1["3"][1]), (38.1, YPE), c=PE)
+    S.place("#FLG01", "power", "PWR_FLAG", "PWR_FLAG", at=(43.18, YL))
+    S.place("#FLG02", "power", "PWR_FLAG", "PWR_FLAG", at=(43.18, YN), rot=180)
+    lx, lg = [35.56, 43.18, 86.36, 91.44], []
+    nx, ng = [35.56, 43.18, 86.36], []
+    pex = [38.1, 86.36]
 
-    Lx, Nx, Lg, Ng = [36.83, 41.91, 44.45], [39.37, 41.91, 49.53], [], []
-    S.label("L", 41.91, YL); S.label("N", 41.91, YN); S.label("PE", 46.99, YPE)
-
-    # --- F1 mains fuse
+    # --- F1, SW1, Wago X1
     if has("fuse"):
-        S.place("F1", "Device", "Fuse", "T6.3A", at=(50.8, YL), rot=90, ref_at=(50.8, 45.72), val_at=(50.8, 48.26))
-        Lg.append((46.99, 54.61)); Lx += [46.99, 54.61]
-    # --- switch: SW1 1-pole, Q0 2-pole (service extension C1)
-    if has("q0"):
-        S.place("Q0", "Switch", "SW_DPST", "2-pole 16 A", anchor=("3", (60.96, YL)), ref_at=(66.04, 45.72), val_at=(66.04, 48.26))
-        Ng.append((60.96, 71.12)); Nx += [60.96, 71.12, 73.66, 81.28]
-        S.place("#FLG04", "power", "PWR_FLAG", "PWR_FLAG", at=(81.28, YN), rot=180)
-        S.label("N_SW", 73.66, YN)
-    else:
-        S.place("SW1", "Switch", "SW_SPST", "1-pole", at=(66.04, YL), ref_at=(66.04, 45.72), val_at=(66.04, 48.26))
-    Lg.append((60.96, 71.12)); Lx += [60.96, 71.12, 73.66, 81.28]
-    S.place("#FLG03", "power", "PWR_FLAG", "PWR_FLAG", at=(81.28, YL))
-    S.label("L_SW", 73.66, YL)
+        S.place("F1", "Device", "Fuse", "T6.3A", at=(50.8, YL), rot=90, ref_at=(49.53, 210.82), val_at=(47.0, 213.36))
+        lx += [46.99, 54.61]; lg.append((46.99, 54.61))
+    S.place("SW1", "Switch", "SW_SPST", "1-pole", at=(66.04, YL), ref_at=(63.5, 210.82), val_at=(62.23, 213.36))
+    lx += [60.96, 71.12]; lg.append((60.96, 71.12))
+    S.place("#FLG03", "power", "PWR_FLAG", "PWR_FLAG", at=(91.44, YL))
+    S.box(76.2, YL - 3.81, 83.82, YN + 3.81, GRAY, 0.2); S.text("X1 Wago", 75.57, YL - 4.45, 1.0)
+    for t, y in (("L", YL), ("N", YN), ("PE", YPE)):
+        S.label(t, 86.36, y)
 
-    # --- K1 / K2 mains relays + 5 V standby PSU
-    if has("relays"):
-        PS2 = S.place("PS2", "Converter_ACDC", "IRM-10-5", "5 V standby, 2 A", at=(86.36, 86.36), rot=270,
-                      ref_at=(71.12, 85.09), val_at=(71.12, 87.63))
-        S.wire((PS2["2"][0], YL), PS2["2"]); S.wire((PS2["1"][0], YN), PS2["1"])     # IRM-10: 2 = AC/L, 1 = AC/N
-        Lx.append(PS2["2"][0]); Nx.append(PS2["1"][0])
-        S.place("K1", "safety", "RELAY_SPLIT", "G2RL-1A-E 5V 16A", at=(106.68, YL), unit=2, ref_at=(106.68, 48.26), hide_val=True)
-        S.place("K2", "safety", "RELAY_SPLIT", "G2RL-1A-E 5V 16A", at=(106.68, YN), unit=2, ref_at=(106.68, 58.67), hide_val=True)
-        Lg.append((101.6, 111.76)); Ng.append((101.6, 111.76))
-        Lx += [101.6, 111.76, 119.38, 127]; Nx += [101.6, 111.76, 119.38, 129.54]
-        S.place("#FLG05", "power", "PWR_FLAG", "PWR_FLAG", at=(127, YL))
-        S.place("#FLG06", "power", "PWR_FLAG", "PWR_FLAG", at=(129.54, YN), rot=180)
-        S.label("L_K", 119.38, YL); S.label("N_K", 119.38, YN)
+    # --- PS2 5 V standby, fed before K1
+    if standby:
+        PS2 = S.place("PS2", "Converter_ACDC", "IRM-10-5", "5 V standby", at=(99.06, YB), rot=90, mirror=True,
+                      ref_at=(84.07, 193.04), val_at=(76.2, 199.39))
+        assert PS2["2"][0] == X5 and PS2["1"][0] == XO and PS2["3"][0] == XO and PS2["4"][0] == X5
+        S.wire(PS2["2"], (X5, YL), c=L); S.wire(PS2["1"], (XO, YN), c=N)
+        lx.append(X5); nx.append(XO)
 
-    # --- PSU 24 V, its FG, Duet VIN
-    PS1 = S.place("PS1", "Converter_ACDC", "IRM-60-24", "PSU 24 V", at=(152.4, 86.36), rot=270, ref_at=(137.16, 85.09), val_at=(137.16, 87.63))
-    S.wire((PS1["1"][0], YL), PS1["1"]); S.wire((PS1["2"][0], YN), PS1["2"])
-    Lx.append(PS1["1"][0]); Nx.append(PS1["2"][0])
-    J4 = S.place("J4", "Connector", "Screw_Terminal_01x01", "PSU FG", anchor=("1", (162.56, 76.2)), rot=270, ref_at=(170.18, 80.01), val_at=(170.18, 82.55))
-    S.wire((162.56, YPE), J4["1"])
-    J2 = S.place("J2", "Connector_Generic", "Conn_01x02", "Duet VIN (1:+ 2:-)", anchor=("1", (PS1["3"][0], 101.6)), rot=270,
-                 ref_at=(165.1, 105.41), val_at=(170.18, 107.95))
-    S.wire(PS1["3"], J2["1"])
-    S.wire(PS1["4"], (PS1["4"][0], 99.06), (J2["2"][0], 99.06), J2["2"])
+    # --- K1 relay in N: contact on the N rail, coil straight above it
+    if relay:
+        S.place("K1", "safety", "RELAY_SPLIT", "", at=(XK, YN), unit=2, ref_at=(112.4, 223.52), hide_val=True)
+        nx += [XA1, XA2, 124.46]; ng.append((XA1, XA2))
+        S.place("#FLG04", "power", "PWR_FLAG", "PWR_FLAG", at=(124.46, YN), rot=180)
+        K1 = S.place("K1", "safety", "RELAY_SPLIT", "%s V coil, 16 A" % ("5" if standby else "24"), at=(XK, YC), unit=1,
+                     ref_at=(99.0, 172.72), val_at=(88.0, 175.26))
+        D1 = S.place("D1", "Device", "D", "1N4148", at=(XK, YD), ref_at=(112.4, 160.02), hide_val=True)
+        S.wire(K1["A1"], (XA1, YD), D1["1"]); S.wire(D1["2"], (XA2, YD), K1["A2"])
+        S.line([(XK, YC + 1.9), (XK, YN - 2.0)], GRAY)
+        if not standby:                          # A3: START at 230 V across the K1 contact, coil from 24 V
+            S.place("S1", "Switch", "SW_Push", "START (230 V)", at=(XK, YN + 6.35), ref_at=(122.0, 231.14), val_at=(122.0, 233.68))
+            S.wire((XA1, YN), (XA1, YN + 6.35), c=N); S.wire((XA2, YN), (XA2, YN + 6.35), c=N)
+            S.wire((XA1, YD), (XA1, YT), c=V24); S.label("24V", XA1, YT)
+        if not nano:                             # coil low side switched by Duet PS_ON
+            S.wire(K1["A2"], (XPS, YC), (XPS, YDU), c=SIG)
 
-    # --- SSR, bed thermal cutoff, bed heater
-    xL = 210.82
-    SSR = S.place("U1", "Relay_SolidState", "S202S02", "SSR 25 A DC-AC", at=(203.2, 86.36), ref_at=(199.39, 74.93), val_at=(199.39, 77.47))
-    S.wire((xL, YL), SSR["1"])
-    HT = S.place("J3", "Connector", "Screw_Terminal_01x03", "Bed heater 230 V", anchor=("3", (xL, 111.76)), rot=270,
-                 ref_at=(226.06, 115.57), val_at=(226.06, 118.11))
-    S.text("3: L  2: N  1: PE", 217.17, 123.19, 1.0)
+    # --- PS1 24 V, PE stud at its earth, SSR
+    PS1 = S.place("PS1", "Converter_ACDC", "IRM-60-24", "PSU 24 V", at=(195.58, YB), rot=90, mirror=True,
+                  ref_at=(203.2, 193.04), val_at=(203.2, 199.39))
+    assert PS1["1"][0] == X24 and PS1["2"][0] == X0P and PS1["3"][0] == X24 and PS1["4"][0] == X0P
+    S.wire(PS1["1"], (X24, YL), c=L); S.wire(PS1["2"], (X0P, YN), c=N)
+    lx.append(X24); nx.append(X0P)
+    S.vline(X24, [PS1["3"][1], YDU] + ([YT] if relay and not standby else []), c=V24)
+    if relay and not standby:
+        S.label("24V", X24, YT)
+    S.vline(X0P, [PS1["4"][1], YDU] + ([63.5] if standby else []) + ([180.34] if nano else []), c=V0)
+    S.place("J4", "Connector", "Screw_Terminal_01x01", "PE stud (PS1 earth)", anchor=("1", (203.2, YPE)), rot=270,
+            ref_at=(206.0, 243.84), val_at=(206.0, 246.38))
+    pex.append(203.2)
+    SSR = S.place("U1", "Relay_SolidState", "S202S02", "SSR 25 A DC-AC", at=(228.6, YB), rot=270, ref_at=(234.95, 193.04), val_at=(234.95, 199.39))
+    S.wire(SSR["2"], (SSR["2"][0], YL), c=L); S.wire(SSR["1"], (SSR["1"][0], YL), (248.92, YL), c=L)
+    lx.append(SSR["2"][0])
+    S.wire(SSR["4"], (SSR["4"][0], YDU), c=SIG); S.wire(SSR["3"], (SSR["3"][0], YDU), c=SIG)
+
+    # --- bed: plug L / N, TH1 and heater on the bed, PE directly to the plate
+    S.place("J3", "safety", "PLUG_2P", "Bed plug L / N", at=(254, YL), ref_at=(251.46, 211.84), val_at=(244.0, 233.68))
+    nx.append(248.92)
     if has("th"):
-        TH =S.place("TH1", "Switch", "SW_SPST_Temperature_NC", "KSD301 130°C", anchor=("2", (xL, 93.98)), rot=90,
-                     ref_at=(226.06, 97.79), val_at=(226.06, 100.33))
-        S.wire(SSR["2"], TH["2"]); S.wire(TH["1"], HT["3"])
+        S.place("TH1", "Switch", "SW_SPST_Temperature_NC", "KSD301 130 °C", at=(271.78, YL - 2.54), ref_at=(268.0, 208.28), val_at=(265.0, 210.82))
+        S.wire((259.08, YL), (266.7, YL), c=L); S.wire((276.86, YL), (287.02, YL), c=L)
     else:
-        S.wire(SSR["2"], HT["3"])
-    S.wire((HT["2"][0], YN), HT["2"]); S.wire((HT["1"][0], YPE), HT["1"])
-    J5 = S.place("J5", "Connector_Generic", "Conn_01x02", "Duet BED (1:- 2:+)", anchor=("1", (190.5, 96.52)), rot=270,
-                 ref_at=(180.34, 101.6), val_at=(176.53, 104.14))
-    S.wire(SSR["4"], (190.5, SSR["4"][1]), J5["1"])
-    S.wire(SSR["3"], (187.96, SSR["3"][1]), J5["2"])
+        S.wire((259.08, YL), (287.02, YL), c=L)
+    HT = S.place("HT1", "Device", "Heater", "Bed heater 230 V", at=(287.02, 220.98), ref_at=(290.83, 219.71), val_at=(279.4, 232.41))
+    S.wire((287.02, YL), HT["1"], c=L); S.wire(HT["2"], (287.02, YN), (259.08, YN), c=N)
+    S.place("J7", "Connector", "Screw_Terminal_01x01", "Bed plate PE", anchor=("1", (287.02, YPE)), ref_at=(290.0, 236.22), val_at=(290.0, 243.84))
+    pex.append(287.02)
+    S.box(262.89, 204.47, 302.26, 247.65, GRAY, 0.2); S.text("Bed", 264.16, 246.38, 1.5, True)
 
-    # --- mains rails
-    S.rail(YL, Lx + [xL], Lg)
-    S.rail(YN, Nx + [HT["2"][0]], Ng)
-    S.rail(YPE, [41.91, 46.99, 162.56, HT["1"][0]])
+    S.rail(YL, lx, lg, L); S.rail(YN, nx, ng, N); S.rail(YPE, pex, (), PE)
 
-    # --- outlines and headers
-    S.outline([(27.94, 39.37), (236.22, 39.37), (236.22, 127), (203.2, 127), (203.2, 86.36), (27.94, 86.36)], RED)
-    S.text("MAINS 230 V AC – HAZARDOUS", 30.48, 43.18, 1.5, True, RED)
-    lv_bottom = 218.44 if has("relays") else 132.08
-    xr = 330.2 if has("relays") else 304.8
-    S.outline([(27.94, 86.36), (203.2, 86.36), (203.2, 127), (236.22, 127), (236.22, 86.36), (xr, 86.36), (xr, lv_bottom), (27.94, lv_bottom)], BLUE)
-    S.text("LOW VOLTAGE 24 V / 5 V DC (SELV)", 30.48, 91.44, 1.5, True, BLUE)
-    S.text("isolation barrier: PSU, SSR", 160.02, 90.17, 1.0)
+    # --- Duet
+    S.place("U3", "safety", "DUET2", "Duet 2 WiFi", at=DUET_AT, ref_at=(91.44, 26.67), hide_val=True)
 
-    if has("relays"):
-        lv(S, PS2, has)
+    # --- 5 V standby lines from PS2 up to the Duet
+    if standby:
+        S.vline(XO, [PS2["3"][1], 63.5, YDU] + ([165.1] if smoke else []), c=V0)
+        S.vline(X5, [PS2["4"][1], YDU] + ([170.18] if smoke else [YT]) + ([58.42] if nano else []), c=V5)
+        S.label("0V", XO, 63.5); S.label("0V", X0P, 63.5)
+        if not smoke:                            # A4: K1 coil fed straight from 5 V
+            S.wire((X5, YT), (XA1, YT), (XA1, YD), c=V5)
+        if nano:
+            S.label("5V", X5, 58.42)
 
-    # --- title and notes
-    S.text("Printer power safety – %s: %s" % (v["code"], v["title"]), 27.94, 30.48, 2.5, True)
-    y = lv_bottom + 7.62
+    if smoke:
+        detector(S, nano)
+    if nano:
+        supervisor(S, K1)
+
+    # --- zones, title, notes
+    S.box(22.86, 20.32, 304.8, YB, BLUE); S.box(22.86, YB, 304.8, 251.46, RED)
+    S.text("LOW VOLTAGE 5 / 12 / 24 V DC (SELV)" if standby else "LOW VOLTAGE 24 V DC (SELV)", 25.4, 25.4, 1.5, True, BLUE)
+    S.text("MAINS 230 V AC – HAZARDOUS", 25.4, 250.19, 1.5, True, RED)
+    S.text("Printer power safety – %s %s" % (v["code"], v["title"]), 22.86, 15.24, 2.5, True)
+    y = 259.08
     for line in v["notes"]:
-        S.text(line, 27.94, y); y += 3.81
+        S.text(line, 22.86, y); y += 3.81
+    S.text("Wires: L brown, N blue, PE green-yellow, 0 V black, 5 V red, 12 V yellow, 24 V orange, signals purple."
+           " Full description: docs/stages.md", 22.86, y)
     return S
 
-def lv(S, PS2, has):
-    """5 V standby harness, safety loop with START self-hold, smoke detector, supervisor."""
-    gp, vp = PS2["3"], PS2["4"]                  # IRM-10-5: 3 = -Vo, 4 = +Vo
-    if gp[0] > vp[0]:
-        gp, vp = vp, gp
-    S.wire(vp, (vp[0], Y5)); S.wire(gp, (gp[0], YG))
-    x5, xg = [vp[0], 93.98, 99.06], [gp[0], 86.36]
-    S.place("#PWR01", "power", "+5V", "+5V", at=(93.98, Y5), val_at=(93.98, 199.39))
-    S.place("#PWR02", "power", "GND", "GND", at=(86.36, YG), val_at=(86.36, 213.36))
-    nano = has("nano")
+def detector(S, nano):
+    """Detector module mounted high; 3-wire bundle 5V / 0V / OK down to PS2 and the K1 coil."""
+    S.box(102.87, 58.42, 175.26, 121.92, GRAY, 0.2)
+    S.text("Detector module (mounted high)", 114.3, 120.65, 1.27, True)
+    # bundle: 0 V and 5 V split at PS2, OK goes straight down to the K1 coil
+    S.wire((XO, 165.1), (B0, 165.1), (B0, 66.04), c=V0)
+    S.wire((X5, 170.18), (B5, 170.18), c=V5); S.vline(B5, [170.18, 99.06, 71.12], c=V5)
+    S.vline(XA1, [116.84, YD] + ([147.32] if nano else []), c=V5)
+    S.line([(102.87, 125.73), (111.76, 125.73), (111.76, 154.94), (102.87, 154.94)], GRAY, 0.15, True)
+    S.text("W1 bundle", 113.03, 133.35, 1.0); S.text("5V / 0V / OK", 113.03, 135.89, 1.0)
+    # U2 5 -> 12 V; IN- and OUT- both connected
+    U2 = S.place("U2", "safety", "DCDC_STEPUP", "MT3608 5->12 V", at=(121.92, 68.58), ref_at=(118.0, 62.23), val_at=(115.0, 77.47))
+    S.wire((B0, 66.04), U2["2"], c=V0); S.wire((B5, 71.12), U2["1"], c=V5)
+    S.wire(U2["4"], (170.18, 66.04), (170.18, 88.9), c=V0); S.rail(88.9, [147.32, 157.48, 162.56, 170.18], c=V0)
+    S.wire(U2["3"], (137.16, 71.12), c=V12); S.vline(137.16, [71.12, 78.74, 92.71], c=V12)
+    S.rail(78.74, [137.16, 157.48, 162.56], c=V12)
+    S.text("12 V", 139.7, 77.47, 1.0); S.label("0V", 170.18, 88.9)
+    # SD119 and the K3 coil in parallel across 12 V / 0 V
+    SD = S.place("B1", "safety", "SMOKE_DET", "SD119 (NC)", at=(142.24, 99.06), ref_at=(139.0, 106.68), val_at=(136.0, 109.22))
+    S.wire((147.32, 88.9), SD["2"], c=V0)
+    S.place("K3", "safety", "RELAY_SPLIT", "12 V coil", at=(157.48, 83.82), rot=270, unit=1, ref_at=(150.5, 82.55), val_at=(141.0, 85.09))
+    D3 = S.place("D3", "Device", "D", "1N4148", at=(162.56, 83.82), rot=270, ref_at=(164.0, 83.82), hide_val=True)
+    S.wire((162.56, 78.74), D3["1"], c=V12); S.wire(D3["2"], (162.56, 88.9), c=V0)
+    # chain from 5 V: SD119 C-NC, K3 NO -> OK
+    S.wire((B5, 99.06), SD["3"], c=V5)
+    S.place("K3", "safety", "RELAY_SPLIT", "", at=(157.48, 99.06), unit=2, ref_at=(155.0, 104.14), hide_val=True)
+    S.line([(157.48, 90.3), (157.48, 97.5)], GRAY)
+    S.wire((162.56, 99.06), (162.56, 116.84), (XA1, 116.84), c=V5)
+    S.text("OK", 150.0, 115.57, 1.0)
 
-    # rung: +5V -> F2 -> STOP -> [SD119 -> K3] -> [START || K4] -> coils -> Q1 -> GND
-    S.wire((99.06, Y5), (99.06, YR))
-    rx, gaps = [99.06, 102.87, 110.49, 116.84, 127], [(102.87, 110.49), (116.84, 127)]
-    S.place("F2", "Device", "Fuse", "0.5A", at=(106.68, YR), rot=90, ref_at=(106.68, 148.59), val_at=(106.68, 151.13))
-    S.place("S1", "Switch", "SW_Push_Open", "STOP (NC)", at=(121.92, YR), ref_at=(121.92, 146.05), val_at=(121.92, 148.59))
-    if nano:
-        S.label("SENSE_STOP", 130.81, YR, 90); rx.append(130.81)
-    if has("smoke"):
-        SD = S.place("B1", "safety", "SMOKE_DET", "SD119", at=(144.78, YR), ref_at=(144.78, 146.05), val_at=(144.78, 148.59))
-        rx += [134.62, 154.94]; gaps.append((134.62, 154.94))
-        p12, p0 = SD["1"], SD["2"]
-        DC = S.place("U2", "safety", "DCDC_STEPUP", "MT3608 5->12 V", anchor=("3", (129.54, 177.8)), ref_at=(119.38, 170.18), val_at=(119.38, 172.72))
-        S.wire(p12, (p12[0], 167.64), (p12[0], 172.72), (p12[0], 177.8), DC["3"])
-        S.wire(p0, (p0[0], 167.64), (p0[0], 172.72), (p0[0], YG)); xg.append(p0[0])
-        S.wire(DC["1"], (DC["1"][0], Y5)); x5.append(DC["1"][0])
-        S.wire(DC["2"], (DC["2"][0], YG)); xg.append(DC["2"][0])
-        S.text("12 V", 131.45, 176.53, 1.0)
-        S.place("K3", "safety", "RELAY_SPLIT", "G5V-1 12V", at=(167.64, YR), unit=2, ref_at=(167.64, 151.13), hide_val=True)
-        S.place("K3", "safety", "RELAY_SPLIT", "G5V-1 12V", anchor=("A1", (p12[0], 167.64)), unit=1, ref_at=(133.35, 166.37), val_at=(129.54, 168.91))
-        D3 = S.place("D3", "Device", "D", "1N4148", at=(144.78, 172.72), ref_at=(144.78, 175.26), hide_val=True)
-        S.wire((p12[0], 172.72), D3["1"]); S.wire(D3["2"], (p0[0], 172.72))
-        rx += [162.56, 172.72]; gaps.append((162.56, 172.72))
-        if nano:
-            S.label("SENSE_SMOKE", 158.75, YR, 90); rx.append(158.75)
-            S.label("SENSE_DET", 175.26, YR, 90); rx.append(175.26)
-
-    # START self-hold: S2 (NO) in parallel with the K4 contact, K4 coil in parallel with K1/K2
-    S.place("S2", "Switch", "SW_Push", "START (NO)", at=(182.88, YR), ref_at=(182.88, 146.05), val_at=(182.88, 148.59))
-    S.place("K4", "safety", "RELAY_SPLIT", "G5V-1 5V", at=(182.88, 162.56), unit=2, ref_at=(182.88, 166.37), hide_val=True)
-    S.wire((177.8, YR), (177.8, 162.56)); S.wire((187.96, YR), (187.96, 162.56))
-    rx += [177.8, 187.96]; gaps.append((177.8, 187.96))
-    if nano:
-        S.label("SENSE_LOOP", 191.77, YR, 90); rx.append(191.77)
-
-    # relay coils (one flyback diode set serves all parallel coils), lamp, low-side MOSFET
-    branches = [("K1", 195.58), ("D1", 200.66), ("K2", 210.82), ("D2", 215.9), ("K4", 226.06), ("R4", 236.22)]
-    yc = 170.18
-    for ref, x in branches:
-        if ref.startswith("K"):
-            val = "G5V-1 5V" if ref == "K4" else "G2RL-1A-E 5V 16A"
-            p = S.place(ref, "safety", "RELAY_SPLIT", val, anchor=("A1", (x, 157.48)), rot=270, unit=1,
-                        ref_at=(x, 173.99), hide_val=True)
-            S.wire((x, YR), p["A1"]); S.wire(p["A2"], (x, yc))
-        elif ref.startswith("D"):
-            p = S.place(ref, "Device", "D", "1N4148", anchor=("1", (x, 158.75)), rot=270, ref_at=(x, 173.99), hide_val=True)
-            S.wire((x, YR), p["1"]); S.wire(p["2"], (x, yc))
+def supervisor(S, K1):
+    """A6: Nano drives Q1 on the low side of the K1 coil; Duet PS_ON and HB go to the Nano."""
+    Q1 = S.place("Q1", "Device", "Q_NMOS", "AO3400", anchor=("D", (127, YC)), mirror=True, ref_at=(131.0, 177.8), val_at=(131.0, 185.42))
+    S.wire(K1["A2"], Q1["D"], c=SIG)
+    R1 = S.place("R1", "Device", "R", "100", anchor=("1", Q1["G"]), rot=90, ref_at=(137.16, 170.18), hide_val=True)
+    R2 = S.place("R2", "Device", "R", "10k", anchor=("1", R1["2"]), ref_at=(143.5, 177.8), val_at=(143.5, 180.0))
+    S.wire(R1["2"], (147.32, R1["2"][1]), c=SIG); S.label("GATE", 147.32, R1["2"][1])
+    S.wire(Q1["S"], (127, 180.34), R2["2"], (X0P, 180.34), c=V0)
+    S.wire((XPS, YDU), (XPS, 60.96), c=SIG); S.label("PS_ON", XPS, 60.96)
+    S.wire((XHB, YDU), (XHB, 55.88), c=SIG); S.label("HB", XHB, 55.88)
+    S.label("OK", XA1, 147.32)
+    A = S.place("A1", "MCU_Module", "Arduino_Nano_v3.x", "Nano supervisor", at=(60.96, 109.22), ref_at=(50.8, 81.28), val_at=(40.64, 78.74))
+    for pin, name in (("5", "GATE"), ("6", "PS_ON"), ("7", "HB"), ("8", "OK")):
+        y = A[pin][1]
+        if name == "OK":
+            S.wire(A[pin], (43.18, y), (35.56, y), c=SIG)
+            R7 = S.place("R7", "Device", "R", "10k", anchor=("1", (43.18, y)), ref_at=(44.5, 111.76), val_at=(44.5, 114.3))
+            S.wire(R7["2"], (43.18, 116.84), c=V0); S.label("0V", 43.18, 116.84)
         else:
-            r = S.place("R4", "Device", "R", "330", anchor=("1", (x, YR)), ref_at=(x + 2.54, 158.75), hide_val=True)
-            h = S.place("H1", "Device", "LED", "LED", anchor=("2", r["2"]), rot=90, ref_at=(x, 173.99), hide_val=True)
-            S.wire(h["1"], (x, yc))
-    rx += [x for _, x in branches]
-    S.rail(YR, rx, gaps)
-    xq = 243.84
-    Q1 = S.place("Q1", "Device", "Q_NMOS", "AO3400", anchor=("D", (xq, yc)), mirror=True, ref_at=(255.27, 165.1), val_at=(255.27, 167.64))
-    S.rail(yc, [x for _, x in branches] + [xq])
-    S.wire(Q1["S"], (Q1["S"][0], YG)); xg.append(Q1["S"][0])
-    R1 = S.place("R1", "Device", "R", "100", anchor=("1", Q1["G"]), rot=90, ref_at=(255.27, 179.07), hide_val=True)
-    R2 = S.place("R2", "Device", "R", "10k", anchor=("1", (264.16, 175.26)), ref_at=(261.62, 180.34), hide_val=True)
-    S.wire(R1["2"], (264.16, 175.26)); S.wire(R2["2"], (264.16, YG)); xg.append(264.16)
-    S.wire((264.16, 175.26), (264.16, 170.18), (269.24, 170.18))
-
-    # Duet expansion header: PS_ON, HB, 5V_EXT, GND
-    J6 = S.place("J6", "Connector_Generic", "Conn_01x04", "Duet exp.", anchor=("1", (317.5, 187.96)),
-                 ref_at=(320.04, 182.88), val_at=(320.04, 185.42))
-    for t, n in (("PS_ON", "1"), ("HB", "2"), ("5V_EXT", "3"), ("GND", "4")):
-        S.text(t, 323.85, J6[n][1] + 0.5, 1.0)
-    S.wire(J6["1"], (309.88, J6["1"][1])); S.label("PS_ON", 309.88, J6["1"][1])
-    if nano:
-        S.wire(J6["2"], (309.88, J6["2"][1])); S.label("HB", 309.88, J6["2"][1])
-    S.wire(J6["3"], (312.42, J6["3"][1]), (312.42, Y5)); x5.append(312.42)
-    S.wire(J6["4"], (314.96, J6["4"][1]), (314.96, YG)); xg.append(314.96)
-
-    if nano:
-        A = S.place("A1", "MCU_Module", "Arduino_Nano_v3.x", "Arduino Nano (supervisor)", at=(281.94, 162.56),
-                    ref_at=(269.24, 132.08), val_at=(269.24, 134.62))
-        D4 = S.place("D4", "Device", "D", "1N5819", anchor=("1", A["27"]), rot=90, ref_at=(292.1, 133.35), val_at=(295.91, 135.89))
-        S.place("#PWR03", "power", "+5V", "+5V", at=D4["2"], val_at=(D4["2"][0], 125.73))
-        for g in ("4", "29"):
-            S.wire(A[g], (A[g][0], YG)); xg.append(A[g][0])
-        S.wire(A["19"], (299.72, A["19"][1])); S.label("PS_ON", 299.72, A["19"][1])
-        S.wire(A["20"], (299.72, A["20"][1])); S.label("HB", 299.72, A["20"][1])
-        sense = [("21", "SENSE_STOP", "R5"), ("23", "SENSE_SMOKE", "R6"), ("25", "SENSE_DET", "R7"), ("26", "SENSE_LOOP", None)]
-        for pin, name, rref in sense:
-            y = A[pin][1]
-            if rref:                             # node floats when the part before it opens -> pull-down
-                S.wire(A[pin], (297.18, y), (314.96, y)); S.label(name, 297.18, y)
-                r = S.place(rref, "Device", "R", "10k", anchor=("1", (314.96, y)), rot=90, ref_at=(318.77, y - 1.27), hide_val=True)
-                S.place("#PWR1" + rref[1], "power", "GND", "GND", at=(325.12, y), rot=90, hide_val=True)
-                S.wire(r["2"], (325.12, y))
-            else:                                # coil node: pulled down by the relay coils
-                S.wire(A[pin], (297.18, y)); S.label(name, 297.18, y)
-    else:
-        S.label("PS_ON", 269.24, 170.18)
-
-    S.rail(Y5, x5); S.rail(YG, xg)
-    S.text("+5V standby", 30.48, Y5 + 0.5, 1.0); S.text("GND", 30.48, YG + 0.5, 1.0)
-    S.text("5 V safety loop: all series parts closed + START pressed once = K1/K2 on, K4 holds", 99.06, 137.16, 1.0)
+            S.wire(A[pin], (35.56, y), c=SIG)
+        S.label(name, 35.56, y)
+    D4 = S.place("D4", "Device", "D", "1N5819", anchor=("1", A["27"]), rot=90, ref_at=(68.58, 76.2), val_at=(68.58, 78.74))
+    S.wire(D4["2"], (D4["2"][0], 73.66), c=V5); S.label("5V", D4["2"][0], 73.66)
+    S.wire(A["4"], (A["4"][0], 137.16), (A["29"][0], 137.16), A["29"], c=V0); S.label("0V", A["4"][0], 137.16)
 
 # ---------------------------------------------------------------- docs
-def stars(n):
-    return "★" * n + "☆" * (5 - n) if n else "–"
-
 def in_variant(p, v):
     feats = v["feats"] | {"base"}
     return p["feat"] in feats and p.get("unless") not in feats
 
 def bom_table(v):
-    rows = ["| Ref | Part | Added | Protection | Opinion |", "|---|---|---|---|---|"]
+    rows = ["| Ref | Part | Added | Note |", "|---|---|---|---|"]
     for p in PARTS:
         if in_variant(p, v):
-            rows.append("| %s | %s | %s | %s | %s |" % (p["ref"], p["part"], FEAT_CODE[p["feat"]], stars(p["stars"]), p["opinion"]))
+            rows.append("| %s | %s | %s | %s |" % (p["ref"], p["part"], FEAT_CODE[p["feat"]], p["opinion"]))
     return "\n".join(rows)
 
-HIERARCHY = """```
-A0 baseline ── A1 TH1 ── A2 F1 ── A3 K1/K2 + STOP + START ── A4 smoke + K3   CORE: against the worst
-                                                               │
-                                                               ├── B1 Nano supervisor      diagnostics
-                                                               ├── C1 2-pole switch Q0     service
-                                                               └── FULL = A4 + B1 + C1
-```
-
-| Fault (worst first) | Consequence | Covered by |
-|---|---|---|
-| SSR fails shorted | bed heats without end → fire | A1 TH1 (hardware), A3 K1/K2 (via Duet), B1 (hung Duet) |
-| Fire from any other cause (PSU, wiring, hot end) | fire spreads | A4 smoke detector + K3 |
-| Short circuit inside the printer | thin wires burn | A2 F1 |
-| Emergency / operator sees a problem | – | A3 STOP |
-| Power returns by itself after a fault (smoke clears, loose contact) | heaters restart unattended | A3 START self-hold |
-| Detector unpowered | detector silently useless | A4 K3 |
-| Duet hangs with heaters on | runaway not cut automatically | B1 watchdog |
-| Why did it switch off? | guessing | B1 sense lines |
-| Reversed Schuko plug + 1-pole switch | live parts when 'off' (service) | C1 Q0 |
-"""
-
 def write_docs(files):
-    md = ["# Printer power safety – variants", "",
-          "**A – core:** the simplest hardware that protects against the worst faults; A0 → A4, each builds on the previous one."
-          " **B – diagnostics** and **C – service** are independent extensions of A4. Images: `docs/img/<code>.png`, KiCad: `kicad/steps/`.",
-          "", HIERARCHY,
-          "Ratings (★ out of 5) say how well a part protects against the fault it is meant for – not how well the whole printer is protected.", ""]
+    md = ["# Printer power safety – KiCad schematics and BOM per stage", "",
+          "What each stage adds, why, and how well it protects: [stages.md](stages.md). The schematics follow the stage"
+          " sketches: mains at the bottom, low voltage above, wire colours as bought. Images: `docs/img/<code>.png`,"
+          " KiCad: `kicad/steps/`.", ""]
     for v, fn in zip(VARIANTS, files):
-        base = {"B": " (extension of A4)", "C": " (extension of A4)"}.get(v["level"], "")
-        md += ["## %s – %s%s" % (v["code"], v["title"], base), "", "![%s](img/%s.png)" % (v["code"], v["code"]), "",
+        md += ["## %s – %s" % (v["code"], v["title"]), "", "![%s](img/%s.png)" % (v["code"], v["code"]), "",
                "KiCad: [`%s`](../kicad/steps/%s)" % (fn, fn), ""]
-        md += v["why"] + [""]
-        md += ["**Rating:** %s – %s" % (stars(v["stars"]), v["rating"]), "", "**BOM of %s**" % v["code"], "", bom_table(v), ""]
+        md += ["- " + n for n in v["notes"]] + ["", "**BOM of %s**" % v["code"], "", bom_table(v), ""]
     open(os.path.join(ROOT_DIR, "docs", "steps.md"), "w", encoding="utf8").write("\n".join(md))
-    core = next(v for v in VARIANTS if v["code"] == "A4")
-    bom = ["# BOM", "", "## Core (A4)", "", bom_table(core), "", "## Full circuit (A4 + B1 + C1)", "", bom_table(VARIANTS[-1]), ""]
+    a5 = next(v for v in VARIANTS if v["code"] == "A5")
+    bom = ["# BOM", "", "## A5 24/5+Smoke (hardware protection complete)", "", bom_table(a5), "",
+           "## A6 24/5+Smoke+Nano", "", bom_table(VARIANTS[-1]), ""]
     open(os.path.join(ROOT_DIR, "docs", "bom.md"), "w", encoding="utf8").write("\n".join(bom))
 
 def main():
     kdir = os.path.join(ROOT_DIR, "kicad")
     open(os.path.join(kdir, "safety.kicad_sym"), "w", encoding="utf8").write(SAFETY_LIB)
+    _libs.pop("safety", None)
     open(os.path.join(kdir, "sym-lib-table"), "w", encoding="utf8").write(
         '(sym_lib_table (version 7)\n  (lib (name "safety") (type "KiCad") (uri "${KIPRJMOD}/safety.kicad_sym") (options "") (descr "Printer power safety symbols")))\n')
     files = []
     for v in VARIANTS:
         fn = "%s_%s.kicad_sch" % (v["code"], v["slug"])
-        build(v).write(os.path.join(kdir, "steps", fn), "261104", v["code"])
+        build(v).write(os.path.join(kdir, "steps", fn), DATE, v["code"])
         files.append(fn)
-    build(VARIANTS[-1]).write(os.path.join(kdir, PROJECT + ".kicad_sch"), "261104", "FULL")
+    build(VARIANTS[-1]).write(os.path.join(kdir, PROJECT + ".kicad_sch"), DATE, VARIANTS[-1]["code"])
     pro = '{"meta": {"filename": "%s.kicad_pro", "version": 3}}\n'
     open(os.path.join(kdir, PROJECT + ".kicad_pro"), "w").write(pro % PROJECT)
-    for fn in files:                             # each variant opens as its own small project
+    for fn in files:                             # each stage opens as its own small project
         open(os.path.join(kdir, "steps", fn.replace(".kicad_sch", ".kicad_pro")), "w").write(pro % fn[:-10])
     open(os.path.join(kdir, "steps", "sym-lib-table"), "w", encoding="utf8").write(
         '(sym_lib_table (version 7)\n  (lib (name "safety") (type "KiCad") (uri "${KIPRJMOD}/../safety.kicad_sym") (options "") (descr "Printer power safety symbols")))\n')
     write_docs(files)
-    print("PODSUMOWANIE: %d variants written to %s" % (len(VARIANTS), kdir))
+    print("PODSUMOWANIE: %d stages written to %s" % (len(VARIANTS), kdir))
 
 if __name__ == "__main__":
     main()

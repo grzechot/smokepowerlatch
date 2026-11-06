@@ -1,23 +1,47 @@
-# Printer power safety
+# SmokePowerLatch
 
-Mains (230 V) power and safety circuit for a 3D printer with a Duet 2 WiFi controller and a 230 V bed heater
-switched by an SSR. Starting from the bare circuit (**Firestarter**), each stage adds one protection, up to
-**Paranoid**. Each stage explains why the protection is needed and how well it protects.
+A smoke detector that cuts the mains power of a 3D printer – in hardware, without relying on the printer's
+controller. KiCad schematics, step-by-step design notes and 3D-printable enclosures.
+
+[Polski opis: README_PL.md](README_PL.md)
+
+## Recommended build: 24/5 + Smoke (stage A5)
 
 ![A5 24/5+Smoke](docs/sketches/A5_24-5_smoke.svg)
 
+- **PS1 24 V** feeds the printer (Duet 2 WiFi, SSR for a 230 V bed heater). It gets mains only through
+  relay **K1**.
+- **PS2 5 V standby** is always on: it powers the Duet in standby and the K1 coil. Only low voltage reaches
+  the front panel.
+- A **smoke detector module** (SD119, step-up to 12 V, supply supervision relay K3) mounted high in the
+  enclosure returns a 5 V **OK** signal through a 3-wire bundle. OK feeds the K1 coil; Duet `M80`/`M81`
+  (PS_ON) switches its low side.
+- **Smoke, a dead detector supply or any broken bundle wire → OK disappears → K1 drops** and the printer
+  loses mains power, without the Duet.
+- **Build SW1 as a 2-pole switch.** Plugs are reversible, so K1 in one wire stops the current but may leave
+  the phase on the loads. Why, and why the next step is two separate relays K1 + K2 rather than one 2-pole
+  relay: [Breaking one pole or both](docs/stages.md#breaking-one-pole-or-both-sw1-k1-and-k2).
+
+Schematic: [kicad/steps/A5_24-5_smoke.kicad_pro](kicad/steps/A5_24-5_smoke.kicad_pro) ·
+preview and parts: [docs/steps.md](docs/steps.md), [docs/bom.md](docs/bom.md) ·
+enclosure for the mains module: [enclosures/mains_module_v4](enclosures/mains_module_v4/).
+
+## How the idea evolved: protection levels A0 → A7
+
+Starting from the bare circuit (**Firestarter**), each stage adds one protection, up to **Paranoid**. Each
+stage explains why the protection is needed and how well it protects:
+**[docs/stages.md](docs/stages.md)**.
+
 | Stage | Name | Adds | Rating |
 |---|---|---|---|
-| A0 | Firestarter | inlet, 1-pole switch, Wago, PSU 24 V, SSR, bed heater, Duet | ☆☆☆☆☆ |
+| A0 | Firestarter | inlet, switch, Wago, PSU 24 V, SSR, bed heater, Duet | ☆☆☆☆☆ |
 | A1 | 24+ThermalCut | thermal cutoff on the bed, in series with the heater | ★★☆☆☆ |
 | A2 | 24+ThermalCut+Fuse | mains fuse | ★★☆☆☆ |
-| A3 | 24+Relay | relay in N, Duet PS_ON, START at 230 V (inlet at the front only) | ★★★☆☆ |
+| A3 | 24+Relay | relay in one wire, Duet PS_ON, START at 230 V (inlet at the front only) | ★★★☆☆ |
 | A4 | 24/5 | 5 V standby PSU, Duet on standby, only low voltage at the front | ★★★☆☆ |
-| A5 | 24/5+Smoke | smoke detector module with supply supervision, 3-wire bundle | ★★★★☆ |
+| **A5** | **24/5+Smoke** | **smoke detector module with supply supervision – recommended** | ★★★★☆ |
 | A6 | 24/5+Smoke+Nano | Nano supervisor: heartbeat watchdog, latch, diagnostics | ★★★★☆ |
-| A7 | Paranoid *(planned)* | second relay in L, hardware START/STOP latch | ★★★★★ |
-
-- **Stages, sketches, effectiveness table:** [docs/stages.md](docs/stages.md)
+| A7 | Paranoid *(planned)* | second, independent relay K2 in the other wire, hardware START/STOP latch | ★★★★★ |
 
 ## Files
 
@@ -54,4 +78,10 @@ Before building, check against the Duet 2 documentation:
 
 Also check the SD119 relay behaviour (NC closed when unpowered, open when the head is removed) on the real detector.
 
-**Mains voltage can kill.** The 230 V side must be built and checked by a qualified person.
+**Mains voltage can kill.** The 230 V side must be built and checked by a qualified person. A 3D-printed
+box is not a certified mains enclosure. This is a design study shared as is, without any warranty.
+
+## Licence
+
+- Hardware (schematics, symbols, sketches, enclosures, documentation): [CERN-OHL-P-2.0](LICENSE).
+- Scripts in `tools/` and the OpenSCAD/FreeCAD scripts: [MIT](LICENSE-MIT).

@@ -1,4 +1,4 @@
-# Printer power safety – stages
+# SmokePowerLatch – stages: how the idea evolved
 
 A 3D printer with a Duet 2 WiFi controller, a 24 V PSU and a 230 V bed heater switched by an SSR.
 Starting from the bare circuit (**Firestarter**), each stage adds one protection. The last one is
@@ -50,7 +50,7 @@ plate are bolted. The bed connector carries only L and N; PE bypasses it.
 - **No fuse:** the house breaker (B16) protects the building wiring, not the thin wires inside the printer.
 - **No automatic cut-off, no emergency stop, no fire detection.**
 - **Reversible Schuko plug + 1-pole switch:** with the plug reversed, the switch breaks N and everything
-  stays live when “off”.
+  stays live when “off”. Use a 2-pole SW1 – see [Breaking one pole or both](#breaking-one-pole-or-both-sw1-k1-and-k2).
 
 ## A1 – 24+ThermalCut
 
@@ -186,10 +186,50 @@ coil. A pull-down on the Q1 gate keeps K1 off when the Nano is not driving it.
 **To add in the detailed design:** a flyback diode on the K1 coil, a gate resistor and pull-down for Q1, a
 pull-down on the OK input, and a diode into the Nano 5 V pin against back-feeding from USB.
 
+## Breaking one pole or both: SW1, K1 and K2
+
+**There is no fixed L and N inside the printer.** Schuko and Polish (type E) sockets are not polarised:
+the plug fits both ways, and even the two sockets of one double outlet can be wired in opposite order. The
+"L" and "N" on the schematics are only wire names. Wherever SW1 or K1 breaks one wire, the phase may be on
+the other one.
+
+What breaking a single pole does and does not do:
+
+| Situation | One pole open | Both poles open |
+|---|---|---|
+| Normal load current (PSU, bed heater) | stops – the circuit is open, whichever wire carries the phase | stops |
+| A burning PSU with a fault from the phase to PE | can still flow if the unbroken wire is the phase; only the house RCD or breaker helps | stops |
+| Touching parts during service, printer "off" | 230 V to earth on the loads in about half of the cases | safe |
+
+So a single pole is enough to stop the energy that feeds a fire in normal operation, but it is not an
+isolating switch.
+
+**Recommendation – SW1 2-pole at every stage.** It is a cheap part (a 2-pole rocker or a C14 inlet module
+with a 2-pole switch), and with it "off" really means off. In the schematics SW1 is drawn as a 1-pole
+switch; build it as 2-pole. K1 in one wire then stays the fire cut-off, SW1 is the isolating switch.
+
+**Next step – K1 and K2 on two separate relays (A7).** K1 breaks one wire, K2 the other, both coils driven
+by the same OK chain, so smoke or a broken bundle wire opens both poles.
+
+- **Why two relays, not one 2-pole relay:** a welded contact is the most likely failure of a mains relay,
+  helped by the inrush current of the 24 V PSU. In a 2-pole relay one welded contact holds the armature,
+  and the armature usually holds the second contact closed too, so one weld defeats both poles. With two
+  independent relays a welded K1 still leaves K2 opening: the load current stops and the fire cut-off still
+  works.
+- **What two relays do not cover:** the common drive. If whatever holds the coils fails "on" (a welded K3
+  contact, a shorted Q1 in A6, a stuck START), both relays stay closed.
+- **A weld is silent:** a welded K1 shows nothing until there is smoke. Test regularly: with the printer on,
+  press TEST on the detector – both relays must drop. Relays with forcibly guided contacts (EN 61810-3) and
+  a mirror NC contact in series with START would block the next start after a weld; this is an option for
+  later, these relays are usually rated 6–8 A.
+- Choose relays rated for the PSU inrush (AgSnO₂ contacts, 16 A class).
+
 ## A7 – Paranoid *(planned)*
 
 **Will add:**
-- relay K2 in L, as a spare for a welded K1 and so that no phase is left on the loads after switching off;
+- relay K2 in the other wire, as an independent relay (see above): no phase is left on the loads after a
+  trip, and a welded K1 does not defeat the cut-off;
+- SW1 as a 2-pole switch in the drawing;
 - a hardware START/STOP latch: an NC mushroom STOP in the 5 V chain, and a START button with a hold contact
   (small relay K4 in parallel with K1).
 
